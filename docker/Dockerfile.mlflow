@@ -1,0 +1,27 @@
+# Dockerfile for the MLflow tracking server.
+#
+# Builds a slim Python image with MLflow + the PostgreSQL driver. The
+# container exposes MLflow's HTTP UI on port 5000 internally; the
+# docker-compose file remaps that to 5556 on the host so it doesn't
+# clash with the locally-running SQLite MLflow on port 5555.
+
+FROM python:3.11-slim
+
+# Avoid Python writing .pyc files / buffering stdout (cleaner container logs).
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# psycopg2-binary lets MLflow speak to PostgreSQL.
+# We pin MLflow to match the version used in the local venv (requirements.txt).
+RUN pip install --no-cache-dir \
+    mlflow==2.18.0 \
+    psycopg2-binary==2.9.10
+
+# Default artifact root inside the container — backed by a docker volume
+# so artifacts persist across container restarts.
+RUN mkdir -p /mlflow/artifacts
+
+EXPOSE 5000
+
+# The actual `mlflow server` command is supplied by docker-compose.yml so we
+# can change flags without rebuilding the image.

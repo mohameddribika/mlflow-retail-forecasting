@@ -1,0 +1,102 @@
+# docker-compose.yml — primary MLflow deployment for this project.
+# -----------------------------------------------------------------
+# Three services:
+#   - postgres : backend store for MLflow experiment + registry metadata
+#   - mlflow   : tracking server (UI + API), backed by postgres
+#   - serve    : model serving container (in profile "with-serve" — only
+#                started after a model has been registered)
+#
+# Standard run order:
+#   1.  cd docker && docker compose up --build       # postgres + mlflow
+#   2.  In a venv terminal at project root:
+#          python src/data_loader.py
+#          python src/train.py
+#          python src/tune.py
+#          python src/register.py
+#          python src/monitor.py
+#   3.  Start serving once a model is in Production:
+#          docker compose --profile with-serve up serve --build
+#
+# URLs:
+#   MLflow tracking UI:    http://localhost:5555
+#   Model serving API:     http://localhost:5001/invocations
+#
+# Note: port 5555 (host) is the same port the project's training scripts
+# already target (see src/utils.py default MLFLOW_TRACKING_URI). Switching
+# from local SQLite-MLflow to dockerized Postgres-MLflow is therefore
+# transparent to the rest of the codebase.
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: mlflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow
+      POSTGRES_DB: mlflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # MLflow shouldn't try to start until the DB is actually ready.
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
+    container_name: mlflow-server
+    restart: unless-stopped
+    ports:
+      - "5555:5000"  # host:container — matches src/utils.py default URI
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # IMPORTANT: --default-artifact-root MUST be mlflow-artifacts:/  (not a
+    # filesystem path) so that clients running OUTSIDE the container upload
+    # artifacts via HTTP to the tracking server, instead of trying to write
+    # directly to the container-internal path /mlflow/artifacts (which
+    # doesn't exist on the host -> "Read-only file system" error).
+    #
+    # --artifacts-destination is where the server actually stores them,
+    # backed by the docker volume mlflow_artifacts.
+    command: >
+      mlflow server
+        --backend-store-uri postgresql://mlflow:mlflow@postgres:5432/mlflow
+        --default-artifact-root mlflow-artifacts:/
+        --artifacts-destination /mlflow/artifacts
+        --serve-artifacts
+        --host 0.0.0.0
+        --port 5000
+
+  serve:
+    build:
+      context: .
+      dockerfile: Dockerfile.serve
+    container_name: mlflow-serve
+    restart: unless-stopped
+    profiles: ["with-serve"]   # only started with --profile with-serve
+    ports:
+      - "5001:5001"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    depends_on:
+      - mlflow
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    command: >
+      mlflow models serve
+        --model-uri models:/retail-sales-forecaster/Production
+        --host 0.0.0.0
+        --port 5001
+        --env-manager local
+
+volumes:
+  postgres_data:
+  mlflow_artifacts:

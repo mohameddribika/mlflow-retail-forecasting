@@ -1,0 +1,14 @@
+# Keep the docker build context lean. Anything listed here is NOT sent
+# to the docker daemon when building images.
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.DS_Store
+../venv
+../mlartifacts
+../mlruns
+../mlflow.db
+../data/raw/*.csv
+../data/processed/*.parquet
+../artifacts
+../models/*.pkl
